@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Arix Signature - Interactive Christmas Tree</title>
+    
+    <!-- Error Handler for Mobile Debugging -->
+    <script>
+        window.onerror = function(msg, url, lineNo, columnNo, error) {
+            var container = document.getElementById('error-container');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'error-container';
+                container.style.position = 'fixed';
+                container.style.top = '0';
+                container.style.left = '0';
+                container.style.width = '100%';
+                container.style.background = 'rgba(20,0,0,0.9)';
+                container.style.color = '#ff5555';
+                container.style.padding = '20px';
+                container.style.zIndex = '9999';
+                container.style.fontFamily = 'monospace';
+                container.style.fontSize = '12px';
+                container.style.pointerEvents = 'none';
+                document.body.appendChild(container);
+            }
+            container.innerHTML += '<div>Error: ' + msg + '<br>Line: ' + lineNo + '</div>';
+            
+            // Hide loader if error occurs
+            var loader = document.getElementById('loader');
+            if(loader) loader.innerHTML = '<div style="color:red">LOAD FAILED<br>请尝试刷新或检查网络</div>';
+            
+            return false;
+        };
+    </script>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Fonts (Replaced Google Fonts with Bunny Fonts for better global/China access) -->
+    <link rel="preconnect" href="https://fonts.bunny.net">
+    <link href="https://fonts.bunny.net/css?family=cinzel:400,700|great-vibes|ma-shan-zheng" rel="stylesheet" />
+
+    <!-- Import Map for React & Three Ecosystem -->
+    <script type="importmap">
+        {
+            "imports": {
+                "react": "https://esm.sh/react@18.2.0",
+                "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+                "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+                "three": "https://esm.sh/three@0.160.0",
+                "@react-three/fiber": "https://esm.sh/@react-three/fiber@8.15.14?external=react,react-dom,three",
+                "@react-three/drei": "https://esm.sh/@react-three/drei@9.96.1?external=react,react-dom,three,@react-three/fiber",
+                "@react-three/postprocessing": "https://esm.sh/@react-three/postprocessing@2.16.0?external=react,react-dom,three,@react-three/fiber",
+                "postprocessing": "https://esm.sh/postprocessing@6.34.1?external=three",
+                "uuid": "https://esm.sh/uuid@9.0.1",
+                "maath": "https://esm.sh/maath@0.10.7?external=three"
+            }
+        }
+    </script>
+
+    <!-- Babel (Replaced unpkg with jsdelivr for stability) -->
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #020210; }
+        #root { width: 100%; height: 100%; }
+        
+        /* Custom Loader */
+        .loader-container {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #020210; z-index: 50; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; pointer-events: none;
+            transition: opacity 1s ease-out;
+        }
+        .loading-text {
+            font-family: 'Cinzel', serif; color: #A5F2F3; letter-spacing: 4px;
+            animation: pulse 2s infinite;
+            text-align: center;
+        }
+        @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
+    </style>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body>
+    <div id="root"></div>
+    <div id="error-container"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useRef, useMemo, useEffect, Suspense } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import * as THREE from 'three';
+        import { Canvas, useFrame, useThree } from '@react-three/fiber';
+        import { Text, Float, Stars, Sparkles as DreiSparkles, Environment, PerspectiveCamera, OrbitControls } from '@react-three/drei';
+        import { EffectComposer, Bloom, Vignette, Noise } from '@react-three/postprocessing';
+
+        // --- Configuration ---
+        const CONFIG = {
+            colors: {
+                midnight: '#020210',
+                ice: '#A5F2F3',
+                snow: '#FFFFFF',
+                gold: '#FFD700',
+                deepBlue: '#1e3a8a'
+            },
+            particleCount: 1500, // Reduced slightly for mobile stability
+            treeHeight: 14,
+            treeRadius: 5.5,
+        };
+
+        // --- Utilities ---
+        
+        // Generate random point on sphere surface
+        const randomSpherePoint = (radius) => {
+            const u = Math.random();
+            const v = Math.random();
+            const theta = 2 * Math.PI * u;
+            const phi = Math.acos(2 * v - 1);
+            const x = radius * Math.sin(phi) * Math.cos(theta);
+            const y = radius * Math.sin(phi) * Math.sin(theta);
+            const z = radius * Math.cos(phi);
+            return new THREE.Vector3(x, y, z);
+        };
+
+        // Generate point on a spiral cone (Tree shape)
+        const spiralConePoint = (i, count, height, maxRadius) => {
+            const t = i / count; // 0 to 1 (bottom to top)
+            const angle = t * 30; // Number of spirals
+            const radius = maxRadius * (1 - t); // Radius gets smaller as we go up
+            
+            const x = Math.cos(angle) * radius;
+            const z = Math.sin(angle) * radius;
+            const y = (t * height) - (height / 2); // Center vertically
+            
+            // Add some jitter for natural look
+            const jitter = 0.3;
+            return new THREE.Vector3(
+                x + (Math.random() - 0.5) * jitter, 
+                y + (Math.random() - 0.5) * jitter, 
+                z + (Math.random() - 0.5) * jitter
+            );
+        };
+
+        // --- Components ---
+
+        const Snow = () => {
+            const count = 1500; // Reduced for mobile
+            const mesh = useRef();
+            
+            // Create particle data
+            const particles = useMemo(() => {
+                const tempPositions = new Float32Array(count * 3);
+                const tempVelocities = []; // Store custom velocity data
+                
+                for (let i = 0; i < count; i++) {
+                    // Position
+                    tempPositions[i * 3] = (Math.random() - 0.5) * 60; // x
+                    tempPositions[i * 3 + 1] = (Math.random() - 0.5) * 40 + 10; // y
+                    tempPositions[i * 3 + 2] = (Math.random() - 0.5) * 60; // z
+                    
+                    // Velocity info: [fallSpeed, swayOffset, swaySpeed]
+                    tempVelocities.push({
+                        y: Math.random() * 0.08 + 0.02, // fall speed
+                        swayOffset: Math.random() * Math.PI * 2,
+                        swaySpeed: Math.random() * 0.02 + 0.01
+                    });
+                }
+                return { positions: tempPositions, velocities: tempVelocities };
+            }, []);
+
+            // Generate Soft Sprite Texture
+            const snowTexture = useMemo(() => {
+                const canvas = document.createElement('canvas');
+                canvas.width = 32;
+                canvas.height = 32;
+                const ctx = canvas.getContext('2d');
+                
+                const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+                gradient.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+                gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.4)');
+                gradient.addColorStop(1, 'rgba(255, 255, 255, 0.0)');
+                
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, 32, 32);
+                
+                const texture = new THREE.CanvasTexture(canvas);
+                return texture;
+            }, []);
+
+            useFrame((state) => {
+                if (!mesh.current) return;
+                
+                const positions = mesh.current.geometry.attributes.position.array;
+                const time = state.clock.getElapsedTime();
+
+                for (let i = 0; i < count; i++) {
+                    const velocity = particles.velocities[i];
+                    
+                    // Fall down
+                    positions[i * 3 + 1] -= velocity.y;
+                    
+                    // Sway horizontally
+                    positions[i * 3] += Math.sin(time * velocity.swaySpeed + velocity.swayOffset) * 0.03;
+                    positions[i * 3 + 2] += Math.cos(time * velocity.swaySpeed + velocity.swayOffset) * 0.03;
+
+                    // Reset if below floor
+                    if (positions[i * 3 + 1] < -15) {
+                        positions[i * 3 + 1] = 25; // Reset to top
+                        positions[i * 3] = (Math.random() - 0.5) * 60; // New random X
+                        positions[i * 3 + 2] = (Math.random() - 0.5) * 60; // New random Z
+                    }
+                }
+                mesh.current.geometry.attributes.position.needsUpdate = true;
+            });
+
+            return (
+                <points ref={mesh}>
+                    <bufferGeometry>
+                        <bufferAttribute
+                            attach="attributes-position"
+                            count={count}
+                            array={particles.positions}
+                            itemSize={3}
+                        />
+                    </bufferGeometry>
+                    <pointsMaterial
+                        size={0.4}
+                        map={snowTexture}
+                        transparent={true}
+                        opacity={0.8}
+                        depthWrite={false}
+                        blending={THREE.AdditiveBlending}
+                        color={CONFIG.colors.snow}
+                    />
+                </points>
+            );
+        };
+
+        const MagicParticles = ({ mode }) => {
+            const mesh = useRef();
+            const { particleCount, treeHeight, treeRadius } = CONFIG;
+            
+            // 1. Initialize Data
+            const dummy = useMemo(() => new THREE.Object3D(), []);
+            
+            // Pre-calculate positions for both states
+            const positions = useMemo(() => {
+                const scattered = [];
+                const tree = [];
+                const colors = [];
+                const colorPalette = [
+                    new THREE.Color(CONFIG.colors.ice),
+                    new THREE.Color(CONFIG.colors.snow),
+                    new THREE.Color(CONFIG.colors.deepBlue),
+                ];
+
+                for (let i = 0; i < particleCount; i++) {
+                    // Scattered: Random sphere distribution
+                    scattered.push(randomSpherePoint(10 + Math.random() * 5));
+                    
+                    // Tree: Spiral Cone
+                    tree.push(spiralConePoint(i, particleCount, treeHeight, treeRadius));
+                    
+                    // Assign random color
+                    colors.push(colorPalette[Math.floor(Math.random() * colorPalette.length)]);
+                }
+                return { scattered, tree, colors };
+            }, []);
+
+            // Animation State (0 = Scatter, 1 = Tree)
+            const animationProgress = useRef(0);
+
+            useFrame((state, delta) => {
+                // Smooth transition logic
+                const target = mode === 'TREE' ? 1 : 0;
+                animationProgress.current = THREE.MathUtils.lerp(animationProgress.current, target, delta * 1.5); // Spring speed
+
+                // Update each instance
+                positions.scattered.forEach((scatterPos, i) => {
+                    const treePos = positions.tree[i];
+                    
+                    // Interpolate position based on progress
+                    const x = THREE.MathUtils.lerp(scatterPos.x, treePos.x, animationProgress.current);
+                    const y = THREE.MathUtils.lerp(scatterPos.y, treePos.y, animationProgress.current);
+                    const z = THREE.MathUtils.lerp(scatterPos.z, treePos.z, animationProgress.current);
+
+                    dummy.position.set(x, y, z);
+                    
+                    // Scale animation: Pulsate slightly
+                    const scale = (Math.sin(state.clock.elapsedTime * 2 + i) * 0.2 + 1) * 0.15;
+                    dummy.scale.set(scale, scale, scale);
+                    
+                    // Rotation: Spin the whole tree slowly when formed
+                    if (animationProgress.current > 0.8) {
+                        const angle = state.clock.elapsedTime * 0.2;
+                        const rx = x * Math.cos(angle) - z * Math.sin(angle);
+                        const rz = x * Math.sin(angle) + z * Math.cos(angle);
+                        dummy.position.set(rx, y, rz);
+                    }
+
+                    dummy.updateMatrix();
+                    mesh.current.setMatrixAt(i, dummy.matrix);
+                });
+                
+                mesh.current.instanceMatrix.needsUpdate = true;
+                // Gently rotate the entire group in scattered mode
+                if (animationProgress.current < 0.2) {
+                    mesh.current.rotation.y += delta * 0.05;
+                }
+            });
+
+            return (
+                <instancedMesh ref={mesh} args={[null, null, particleCount]}>
+                    <dodecahedronGeometry args={[0.2, 0]} />
+                    <meshStandardMaterial 
+                        toneMapped={false}
+                        color={CONFIG.colors.snow}
+                        emissive={CONFIG.colors.ice}
+                        emissiveIntensity={2}
+                        roughness={0.1}
+                        metalness={0.9}
+                    />
+                </instancedMesh>
+            );
+        };
+
+        const GlowingText = ({ content, position, fontSize, fontUrl, mode, targetPosition, letterSpacing = 0.05 }) => {
+            const group = useRef();
+            const textRef = useRef();
+            const progress = useRef(0);
+            
+            useFrame((state, delta) => {
+                const target = mode === 'TREE' ? 1 : 0;
+                progress.current = THREE.MathUtils.lerp(progress.current, target, delta * 1.2);
+
+                // Interpolate Position
+                if (group.current) {
+                    group.current.position.x = THREE.MathUtils.lerp(position[0], targetPosition[0], progress.current);
+                    group.current.position.y = THREE.MathUtils.lerp(position[1], targetPosition[1], progress.current);
+                    group.current.position.z = THREE.MathUtils.lerp(position[2], targetPosition[2], progress.current);
+                    
+                    // Look at camera
+                    group.current.lookAt(state.camera.position);
+                }
+            });
+
+            return (
+                <group ref={group} position={position}>
+                    <Float speed={2} rotationIntensity={0.5} floatIntensity={1}>
+                        <Text
+                            ref={textRef}
+                            font={fontUrl}
+                            fontSize={fontSize}
+                            letterSpacing={letterSpacing}
+                            lineHeight={1.2}
+                            textAlign="center"
+                            anchorX="center"
+                            anchorY="middle"
+                            // Adding fallback font behavior
+                            onSync={(troika) => {
+                                // Optional: logic when font loads
+                            }}
+                        >
+                            {content}
+                            <meshPhysicalMaterial 
+                                color={CONFIG.colors.ice}
+                                toneMapped={false}
+                                emissive={CONFIG.colors.deepBlue}
+                                emissiveIntensity={0.5}
+                                roughness={0}
+                                metalness={1}
+                                clearcoat={1}
+                                transmission={0.2}
+                            />
+                        </Text>
+                    </Float>
+                </group>
+            );
+        };
+
+        const Scene = ({ mode }) => {
+            return (
+                <>
+                    <PerspectiveCamera makeDefault position={[0, 2, 25]} fov={50} />
+                    <OrbitControls 
+                        enablePan={false} 
+                        enableZoom={true} 
+                        minDistance={10} 
+                        maxDistance={40} 
+                        autoRotate={mode === 'TREE'}
+                        autoRotateSpeed={0.5}
+                    />
+
+                    {/* Lighting - Tokyo Winter Illumination Style */}
+                    <ambientLight intensity={0.2} color="#001133" />
+                    <spotLight position={[10, 20, 10]} angle={0.5} penumbra={1} intensity={2} color={CONFIG.colors.ice} />
+                    <pointLight position={[-10, -5, -10]} intensity={2} color={CONFIG.colors.deepBlue} />
+                    
+                    {/* Environment Reflections */}
+                    <Environment preset="night" />
+                    <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
+
+                    {/* Core Elements */}
+                    <MagicParticles mode={mode} />
+                    <Snow />
+
+                    {/* Floating Texts - Dual Position System */}
+                    {/* Merry Christmas - Using JSDelivr for stability in China */}
+                    <GlowingText 
+                        mode={mode}
+                        content="Merry Christmas" 
+                        fontSize={2.5} 
+                        fontUrl="https://cdn.jsdelivr.net/npm/@fontsource/great-vibes@5.0.8/files/great-vibes-latin-400-normal.woff"
+                        position={[-8, 6, -5]}  // Scattered position
+                        targetPosition={[0, 8.5, 0]} // Tree Top position
+                    />
+
+                    {/* Poetic Message - Using JSDelivr for stability in China */}
+                    <GlowingText 
+                        mode={mode}
+                        content={"小媛同学\n时光深知你是我最致命的爱人"} 
+                        fontSize={1.1}
+                        letterSpacing={0.1}
+                        fontUrl="https://cdn.jsdelivr.net/npm/@fontsource/ma-shan-zheng@5.0.13/files/ma-shan-zheng-chinese-simplified-400-normal.woff"
+                        position={[8, -4, 5]}   // Scattered position
+                        targetPosition={[0, -2.5, 4.5]} // Base of tree position
+                    />
+
+                    {/* Post Processing for Cinematic Bloom */}
+                    <EffectComposer disableNormalPass>
+                        <Bloom 
+                            luminanceThreshold={0.2} 
+                            mipmapBlur 
+                            intensity={1.5} 
+                            radius={0.6}
+                        />
+                        <Noise opacity={0.02} />
+                        <Vignette eskil={false} offset={0.1} darkness={1.1} />
+                    </EffectComposer>
+                </>
+            );
+        };
+
+        // --- UI Layer ---
+        const UI = ({ mode, setMode }) => {
+            return (
+                <>
+                    {/* Interaction Button */}
+                    <div className="absolute bottom-10 w-full flex flex-col items-center justify-center pointer-events-none z-10">
+                        <button 
+                            onClick={() => setMode(mode === 'SCATTER' ? 'TREE' : 'SCATTER')}
+                            className={`
+                                pointer-events-auto
+                                px-8 py-3 
+                                bg-transparent 
+                                border border-[#A5F2F3] 
+                                text-[#A5F2F3] 
+                                font-serif tracking-widest
+                                transition-all duration-700
+                                hover:bg-[#A5F2F3] hover:text-[#020210] hover:scale-105
+                                backdrop-blur-sm
+                                ${mode === 'TREE' ? 'shadow-[0_0_30px_#A5F2F3]' : ''}
+                            `}
+                            style={{ fontFamily: "'Cinzel', serif" }}
+                        >
+                            {mode === 'SCATTER' ? 'IGNITE LIGHTS' : 'RELEASE'}
+                        </button>
+                    </div>
+
+                    {/* Artist Signature */}
+                    <div className="absolute bottom-4 right-6 z-10 pointer-events-none">
+                        <h3 
+                            className="text-[#A5F2F3] text-opacity-40 text-sm tracking-widest"
+                            style={{ fontFamily: "'Cinzel', 'Ma Shan Zheng', serif" }}
+                        >
+                            By ziyao
+                        </h3>
+                    </div>
+                </>
+            );
+        };
+
+        const App = () => {
+            const [mode, setMode] = useState('SCATTER'); // 'SCATTER' | 'TREE'
+            const [mounted, setMounted] = useState(false);
+
+            useEffect(() => {
+                setMounted(true);
+            }, []);
+
+            if (!mounted) return null;
+
+            return (
+                <>
+                    <Canvas 
+                        dpr={[1, 2]} 
+                        gl={{ antialias: false, toneMapping: THREE.ReinhardToneMapping, toneMappingExposure: 1.5 }}
+                    >
+                        <color attach="background" args={[CONFIG.colors.midnight]} />
+                        <Suspense fallback={null}>
+                            <Scene mode={mode} />
+                        </Suspense>
+                    </Canvas>
+                    <UI mode={mode} setMode={setMode} />
+                    
+                    {/* Intro Overlay */}
+                    <div id="loader" className="loader-container">
+                        <div className="loading-text">LOADING EXPERIENCE...</div>
+                    </div>
+                </>
+            );
+        };
+
+        // --- Init ---
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+
+        // Simple loader removal
+        setTimeout(() => {
+            const loader = document.getElementById('loader');
+            if(loader) loader.style.opacity = '0';
+            setTimeout(() => { if(loader) loader.remove(); }, 1000);
+        }, 2500); // Slightly longer load time allowance
+
+    </script>
+<script type="module" src="/index.tsx"></script>
+</body>
+</html>
